@@ -156,8 +156,15 @@ void MediaPlayCtrl::SetMachineObject(MachineObject* obj)
         m_lan_mode       = obj->is_lan_mode_printer();
         m_lan_proto      = obj->liveview_local;
         m_remote_proto   = obj->get_liveview_remote();
+        std::string prev_lan_ip = m_lan_ip;
+        std::string prev_lan_passwd = m_lan_passwd;
         m_lan_ip         = obj->get_dev_ip();
         m_lan_passwd     = obj->get_access_code();
+        if (prev_lan_ip != m_lan_ip || prev_lan_passwd.size() != m_lan_passwd.size()) {
+            BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::SetMachineObject[" << machine
+                << "]: lan_ip '" << prev_lan_ip << "' -> '" << m_lan_ip << "'"
+                << ", lan_passwd_len " << prev_lan_passwd.size() << " -> " << m_lan_passwd.size();
+        }
         m_device_busy    = obj->is_camera_busy_off();
         m_tutk_state     = obj->tutk_state;
 
@@ -283,7 +290,15 @@ void MediaPlayCtrl::Play()
         return;
     }
 
-    BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::Play: " << m_lan_proto << m_remote_proto << m_disable_lan;
+    BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::Play:"
+        << " lan_proto=" << m_lan_proto
+        << " remote_proto=" << m_remote_proto
+        << " disable_lan=" << m_disable_lan
+        << " lan_mode=" << m_lan_mode
+        << " lan_ip='" << m_lan_ip << "'"
+        << " lan_passwd_len=" << m_lan_passwd.size()
+        << " lan_user='" << m_lan_user << "'"
+        << " machine='" << m_machine << "'";
     NetworkAgent *agent = wxGetApp().getAgent();
     std::string  agent_version = agent ? agent->get_version() : "";
     // Prefer LAN-direct whenever the printer is reachable on the LAN,
@@ -299,6 +314,8 @@ void MediaPlayCtrl::Play()
     //
     // m_disable_lan still gives us a fallback to remote on retry if LAN fails.
     bool lan_url_buildable = !m_lan_ip.empty() && !m_lan_passwd.empty();
+    BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::Play: lan_url_buildable=" << lan_url_buildable
+        << " (will " << ((lan_url_buildable && !m_disable_lan) ? "USE LAN" : "skip LAN") << ")";
     if (lan_url_buildable && !m_disable_lan) {
         m_disable_lan = m_remote_proto && !m_lan_mode; // try remote next time
         std::string url;

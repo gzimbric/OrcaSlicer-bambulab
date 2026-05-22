@@ -136,7 +136,26 @@ bool use_bridge_network_module()
 
 bool source_module_is_network_module()
 {
-    return use_bridge_network_module();
+    // The PJarczak bridge intercepts bambu_networking.dll calls (MQTT, HTTP, auth)
+    // so OrcaSlicer can reach Bambu cloud services that BambuConnect would otherwise
+    // block. Historically the same bridge also fronted the BambuSource module —
+    // meaning camera-stream Bambu_Create / Bambu_Open calls were forwarded to
+    // libBambuSource.so inside the WSL distro. That .so is older than the native
+    // Windows BambuSource.dll and does NOT implement BRTC (the new TLS-signaled
+    // TCP-6000 + UDP-P2P protocol that current Bambu firmware (N7 etc.) requires
+    // for live camera).
+    //
+    // Detach the source path from the network path: load BambuSource directly from
+    // the native plugins dir (Bambu Studio's current BambuSource.dll is already
+    // sitting there) so camera streaming benefits from BRTC, while the network
+    // module keeps going through the bridge for cloud connectivity.
+    //
+    // Honor an env-flag override so we can flip back if the native source DLL
+    // ends up needing callbacks into the bridged network module.
+    bool forced = false;
+    if (env_flag("PJARCZAK_BRIDGE_SOURCE_VIA_NETWORK", forced))
+        return forced;
+    return false;
 }
 
 bool should_force_linux_plugin_payload(const std::string& plugin_name)
