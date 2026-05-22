@@ -210,7 +210,7 @@ void wxMediaCtrl3::PlayThread()
 
         lk.unlock();
         Bambu_Tunnel tunnel = nullptr;
-        int error = Bambu_Create(&tunnel, m_url->BuildURI().ToUTF8());
+        int error = Bambu_Create(&tunnel, url->BuildURI().ToUTF8());
         if (error == 0) {
             Bambu_SetLogger(tunnel, &wxMediaCtrl3::bambu_log, this);
             error = Bambu_Open(tunnel);
@@ -219,9 +219,10 @@ void wxMediaCtrl3::PlayThread()
 
             else if (error == -2)
             {
-                m_error = error;
-                BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::DLL load error ";
+                BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::DLL load error";
+                Bambu_Destroy(tunnel);
                 lk.lock();
+                m_error = error;
                 NotifyStopped();
                 continue;
             }
@@ -320,6 +321,7 @@ void wxMediaCtrl3::PlayThread()
         }
         if (tunnel) {
             lk.unlock();
+            Bambu_SetLogger(tunnel, nullptr, nullptr);
             Bambu_Close(tunnel);
             Bambu_Destroy(tunnel);
             tunnel = nullptr;
