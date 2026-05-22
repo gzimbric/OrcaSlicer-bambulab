@@ -3273,24 +3273,34 @@ int MachineObject::parse_json(std::string tunnel, std::string payload, bool key_
                             is_enable_ams_np =  get_flag_bits(flag3, 9);
                         }
                     }
-                    if (!key_field_only) {
-                        if (jj.contains("net")) {
-                            if (jj["net"].contains("conf")) {
-                                network_wired = (jj["net"]["conf"].get<int>() & (0x1)) != 0;
-                            }
-                            if (jj["net"].contains("info")) {
-                                for (auto info_item = jj["net"]["info"].begin(); info_item != jj["net"]["info"].end(); info_item++) {
+                    // Always extract the printer's LAN IP from net.info[0].ip - this
+                    // is required for LAN-direct camera streaming and only carries useful
+                    // info when net.info[0].ip != 0. We pulled this out of the
+                    // !key_field_only block so cloud-bound printers (where the cloud
+                    // message handler historically called parse_json with key_field_only=true
+                    // for non-selected machines) still get their dev_ip populated.
+                    if (jj.contains("net")) {
+                        if (!key_field_only && jj["net"].contains("conf")) {
+                            network_wired = (jj["net"]["conf"].get<int>() & (0x1)) != 0;
+                        }
+                        if (jj["net"].contains("info")) {
+                            for (auto info_item = jj["net"]["info"].begin(); info_item != jj["net"]["info"].end(); info_item++) {
 
-                                    if (info_item->contains("ip")) {
-                                        auto tmp_dev_ip = (*info_item)["ip"].get<int64_t>();
-                                        if (tmp_dev_ip == 0)
-                                            continue ;
-                                        else {
-                                           set_dev_ip(DevUtil::convertToIp(tmp_dev_ip));
-                                        }
-                                    } else {
-                                        break;
+                                if (info_item->contains("ip")) {
+                                    auto tmp_dev_ip = (*info_item)["ip"].get<int64_t>();
+                                    if (tmp_dev_ip == 0)
+                                        continue ;
+                                    else {
+                                       std::string new_ip = DevUtil::convertToIp(tmp_dev_ip);
+                                       if (new_ip != get_dev_ip()) {
+                                           BOOST_LOG_TRIVIAL(info) << "MachineObject[" << get_dev_id()
+                                               << "]: set_dev_ip from MQTT net.info -> " << new_ip
+                                               << " (was '" << get_dev_ip() << "', key_field_only=" << key_field_only << ")";
+                                       }
+                                       set_dev_ip(new_ip);
                                     }
+                                } else {
+                                    break;
                                 }
                             }
                         }
