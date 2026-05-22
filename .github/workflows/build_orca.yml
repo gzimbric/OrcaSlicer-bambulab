@@ -283,6 +283,17 @@ jobs:
           dir "C:/Program Files (x86)/Windows Kits/10/Include"
           choco install nsis
 
+      - name: Fetch PJarczak rootfs asset (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ${{ github.workspace }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path tools\pjarczak_bambu_runtime\rootfs -Force | Out-Null
+          $url = "https://github.com/gzimbric/OrcaSlicer-bambulab/releases/download/ci-assets/windows-wsl2-rootfs.tar"
+          $dest = "tools\pjarczak_bambu_runtime\rootfs\windows-wsl2-rootfs.tar"
+          Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+          Get-Item $dest | Select-Object Length, LastWriteTime
+
       - name: Build slicer Win
         if: runner.os == 'Windows'
         working-directory: ${{ github.workspace }}
