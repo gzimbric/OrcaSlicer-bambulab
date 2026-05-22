@@ -286,7 +286,14 @@ void MediaPlayCtrl::Play()
     BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::Play: " << m_lan_proto << m_remote_proto << m_disable_lan;
     NetworkAgent *agent = wxGetApp().getAgent();
     std::string  agent_version = agent ? agent->get_version() : "";
-    if (m_lan_proto > MachineObject::LVL_Disable && (m_lan_mode || !m_remote_proto) && !m_disable_lan && !m_lan_ip.empty()) {
+    // Prefer LAN-direct whenever it's available, even for cloud-bound printers.
+    // Bambu Studio does the same (verified via Wireshark on N7 firmware): it streams
+    // camera frames over TCP port 6000 directly to the printer's local IP regardless of
+    // cloud-connection state. The previous condition `(m_lan_mode || !m_remote_proto)`
+    // forced cloud-bound printers down the TUTK relay path, where the relay accepts
+    // the signaling handshake but never returns video frames (status [2:-1]).
+    // m_disable_lan still gives us a fallback to remote on retry if LAN itself fails.
+    if (m_lan_proto > MachineObject::LVL_Disable && !m_disable_lan && !m_lan_ip.empty()) {
         m_disable_lan = m_remote_proto && !m_lan_mode; // try remote next time
         std::string url;
         if (m_lan_proto == MachineObject::LVL_Local)
