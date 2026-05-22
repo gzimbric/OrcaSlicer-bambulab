@@ -283,16 +283,22 @@ jobs:
           dir "C:/Program Files (x86)/Windows Kits/10/Include"
           choco install nsis
 
-      - name: Fetch PJarczak rootfs asset (Windows)
+      - name: Fetch PJarczak prebuilt assets (Windows)
         if: runner.os == 'Windows'
         working-directory: ${{ github.workspace }}
         shell: pwsh
         run: |
+          $base = "https://github.com/gzimbric/OrcaSlicer-bambulab/releases/download/ci-assets"
+          # 1) WSL rootfs
           New-Item -ItemType Directory -Path tools\pjarczak_bambu_runtime\rootfs -Force | Out-Null
-          $url = "https://github.com/gzimbric/OrcaSlicer-bambulab/releases/download/ci-assets/windows-wsl2-rootfs.tar"
-          $dest = "tools\pjarczak_bambu_runtime\rootfs\windows-wsl2-rootfs.tar"
-          Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
-          Get-Item $dest | Select-Object Length, LastWriteTime
+          Invoke-WebRequest -Uri "$base/windows-wsl2-rootfs.tar" -OutFile "tools\pjarczak_bambu_runtime\rootfs\windows-wsl2-rootfs.tar" -UseBasicParsing
+          # 2) Linux host binaries + certs
+          $hostDir = "tools\pjarczak_bambu_linux_host\runtime\linux-x86_64"
+          New-Item -ItemType Directory -Path $hostDir -Force | Out-Null
+          $tar = "$env:RUNNER_TEMP\pjarczak_linux_host.tar"
+          Invoke-WebRequest -Uri "$base/pjarczak_linux_host.tar" -OutFile $tar -UseBasicParsing
+          tar -xf $tar -C $hostDir
+          Get-ChildItem tools\pjarczak_bambu_runtime\rootfs, $hostDir | Select-Object Length, FullName
 
       - name: Build slicer Win
         if: runner.os == 'Windows'
