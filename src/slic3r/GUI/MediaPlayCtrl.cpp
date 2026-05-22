@@ -286,22 +286,28 @@ void MediaPlayCtrl::Play()
     BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::Play: " << m_lan_proto << m_remote_proto << m_disable_lan;
     NetworkAgent *agent = wxGetApp().getAgent();
     std::string  agent_version = agent ? agent->get_version() : "";
-    // Prefer LAN-direct whenever it's available, even for cloud-bound printers.
-    // Bambu Studio does the same (verified via Wireshark on N7 firmware): it streams
-    // camera frames over TCP port 6000 directly to the printer's local IP regardless of
-    // cloud-connection state. The previous condition `(m_lan_mode || !m_remote_proto)`
-    // forced cloud-bound printers down the TUTK relay path, where the relay accepts
-    // the signaling handshake but never returns video frames (status [2:-1]).
-    // m_disable_lan still gives us a fallback to remote on retry if LAN itself fails.
-    if (m_lan_proto > MachineObject::LVL_Disable && !m_disable_lan && !m_lan_ip.empty()) {
+    // Prefer LAN-direct whenever the printer is reachable on the LAN,
+    // even for cloud-bound printers. Bambu Studio always does this (verified
+    // via Wireshark on N7 firmware: TLS-signaled TCP 6000 then UDP P2P for
+    // video, what the printer calls "BRTC").
+    //
+    // Don't gate on liveview_local: newer firmware reports "rtsp_url":"disable"
+    // (because legacy RTSP is gone) which DeviceManager.cpp:3761 maps to
+    // LVL_Disable, but the modern Bambu local protocol on port 6000 is still
+    // served. Treat LVL_None/LVL_Disable as "use the local port-6000 protocol"
+    // when we have an IP and access code.
+    //
+    // m_disable_lan still gives us a fallback to remote on retry if LAN fails.
+    bool lan_url_buildable = !m_lan_ip.empty() && !m_lan_passwd.empty();
+    if (lan_url_buildable && !m_disable_lan) {
         m_disable_lan = m_remote_proto && !m_lan_mode; // try remote next time
         std::string url;
-        if (m_lan_proto == MachineObject::LVL_Local)
-            url = "bambu:///local/" + m_lan_ip + ".?port=6000&user=" + m_lan_user + "&passwd=" + m_lan_passwd;
-        else if (m_lan_proto == MachineObject::LVL_Rtsps)
+        if (m_lan_proto == MachineObject::LVL_Rtsps)
             url = "bambu:///rtsps___" + m_lan_user + ":" + m_lan_passwd + "@" + m_lan_ip + "/streaming/live/1?proto=rtsps";
         else if (m_lan_proto == MachineObject::LVL_Rtsp)
             url = "bambu:///rtsp___" + m_lan_user + ":" + m_lan_passwd + "@" + m_lan_ip + "/streaming/live/1?proto=rtsp";
+        else  // LVL_Local, LVL_None, LVL_Disable - all use the local Bambu protocol (port 6000 / BRTC)
+            url = "bambu:///local/" + m_lan_ip + ".?port=6000&user=" + m_lan_user + "&passwd=" + m_lan_passwd;
         url += "&device=" + m_machine;
         url += "&net_ver=" + agent_version;
         url += "&dev_ver=" + m_dev_ver;
