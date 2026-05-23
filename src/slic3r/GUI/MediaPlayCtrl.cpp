@@ -27,6 +27,22 @@
 #include <wx/clipbrd.h>
 #include "wx/evtloop.h"
 
+// When the PJarczak bridge is active, OrcaSlicer is talking to Bambu cloud
+// services and the printer's BRTC server while presenting itself as BambuStudio
+// (User-Agent on outbound HTTP, X-BBL-Client-Name on plugin sync). The camera
+// URL also carries a cli_ver= query parameter that the printer's BRTC server
+// inspects on the local-direct TLS handshake. Sending OrcaSlicer's
+// SLIC3R_VERSION ("01.10.01.50") there is enough for the printer to recognize
+// us as a non-BS client and tear down the BRTC session after the handshake.
+// Match what BambuStudio's URL builder would emit by using the bridge's
+// forced client version when the bridge is in play.
+static std::string media_cli_ver_str()
+{
+    if (Slic3r::PJarczakLinuxBridge::enabled())
+        return Slic3r::PJarczakLinuxBridge::forced_client_version();
+    return std::string(SLIC3R_VERSION);
+}
+
 static std::map<int, std::string> error_messages = {
     {1, L("The device cannot handle more conversations. Please retry later.")},
     {2, L("Player is malfunctioning. Please reinstall the system player.")},
@@ -329,7 +345,7 @@ void MediaPlayCtrl::Play()
         url += "&net_ver=" + agent_version;
         url += "&dev_ver=" + m_dev_ver;
         url += "&cli_id=" + wxGetApp().app_config->get("slicer_uuid");
-        url += "&cli_ver=" + std::string(SLIC3R_VERSION);
+        url += "&cli_ver=" + media_cli_ver_str();
         BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl: " << hide_passwd(hide_id_middle_string(url, url.find(m_lan_ip), m_lan_ip.length()), {m_lan_passwd});
         m_url = url;
         load();
@@ -382,7 +398,7 @@ void MediaPlayCtrl::Play()
                 url += "&dev_ver=" + dv;
                 url += "&refresh_url=" + boost::lexical_cast<std::string>(&refresh_agora_url);
                 url += "&cli_id=" + wxGetApp().app_config->get("slicer_uuid");
-                url += "&cli_ver=" + std::string(SLIC3R_VERSION);
+                url += "&cli_ver=" + media_cli_ver_str();
             }
             BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl: " << hide_passwd(url, 
                     {"?uid=", "authkey=", "passwd=", "license=", "token="});
@@ -591,7 +607,7 @@ void MediaPlayCtrl::ToggleStream()
             url += "&dev_ver=" + dv;
             url += "&refresh_url=" + boost::lexical_cast<std::string>(&refresh_agora_url);
             url += "&cli_id=" + wxGetApp().app_config->get("slicer_uuid");
-            url += "&cli_ver=" + std::string(SLIC3R_VERSION);
+            url += "&cli_ver=" + media_cli_ver_str();
         }
         BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::ToggleStream: " << hide_passwd(url, 
                 {"?uid=", "authkey=", "passwd=", "license=", "token="});
