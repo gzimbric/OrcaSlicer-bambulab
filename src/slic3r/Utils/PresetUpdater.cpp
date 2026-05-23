@@ -105,13 +105,41 @@ static void ensure_bridge_native_windows_plugins(bool &cancel,
         return;
 
     fs::path plugin_folder = fs::path(data_dir()) / "plugins";
-    if (fs::exists(plugin_folder / "BambuSource.dll") &&
-        fs::exists(plugin_folder / "bambu_networking.dll")) {
-        BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] DLLs already present, skip";
+
+    // Force the query to the v02.06.x plugin line rather than reusing the
+    // bridge's forced_client_version (currently "02.05.02.51"). The
+    // v02.05.02.x line predates current camera-streaming protocol support;
+    // the v02.06.00.x DLLs that BambuStudio's April 2026 release installs
+    // are verified-working for the camera path against current firmware.
+    const std::string current_query_version = "02.06.00.00";
+
+    // Use a small marker file to record which query line we last installed.
+    // If existing DLLs were installed for a different (older) line, force a
+    // re-fetch instead of skipping. Without this marker users who downloaded
+    // an earlier helper's v02.05.02.x DLLs would never auto-upgrade.
+    fs::path marker_path = plugin_folder / "bambu_plugins_query_version.txt";
+    bool dlls_present = fs::exists(plugin_folder / "BambuSource.dll") &&
+                        fs::exists(plugin_folder / "bambu_networking.dll");
+    std::string marker_value;
+    if (fs::exists(marker_path)) {
+        try {
+            boost::nowide::ifstream ifs(marker_path.string());
+            std::getline(ifs, marker_value);
+            boost::algorithm::trim(marker_value);
+        } catch (...) {}
+    }
+    if (dlls_present && marker_value == current_query_version) {
+        BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] DLLs present and marker matches "
+                                << current_query_version << ", skip";
         return;
     }
-
-    BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] BambuSource.dll/bambu_networking.dll missing; fetching from Bambu CDN";
+    if (dlls_present) {
+        BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] DLLs present but marker ('"
+                                << marker_value << "') does not match expected line "
+                                << current_query_version << ", re-fetching";
+    } else {
+        BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] BambuSource.dll/bambu_networking.dll missing; fetching from Bambu CDN";
+    }
 
     if (!fs::exists(plugin_folder)) {
         try { fs::create_directories(plugin_folder); }
@@ -121,10 +149,10 @@ static void ensure_bridge_native_windows_plugins(bool &cancel,
         }
     }
 
-    std::string using_version = plugin_version;
-    if (using_version.size() >= 9)
-        using_version = using_version.substr(0, 9) + "00";
-    std::string meta_url = http_url + "?slicer/plugins/cloud=" + using_version;
+    // We still send X-BBL-Client-Version=forced_client_version so the
+    // request itself looks like a BambuStudio plugin sync.
+    (void)plugin_version;
+    std::string meta_url = http_url + "?slicer/plugins/cloud=" + current_query_version;
 
     // Save the bridge-overridden headers so we can swap to the default
     // Windows OS-Type for the duration of this call, then restore.
@@ -237,6 +265,17 @@ static void ensure_bridge_native_windows_plugins(bool &cancel,
     try { fs::remove(tmp_zip_path); } catch (...) {}
 
     BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] " << extracted << " DLL(s) installed";
+
+    // Record which line we installed so a future helper run can detect a
+    // stale set and re-fetch instead of skipping.
+    if (extracted > 0) {
+        try {
+            boost::nowide::ofstream ofs(marker_path.string(), std::ios::trunc);
+            ofs << current_query_version << "\n";
+        } catch (const std::exception &e) {
+            BOOST_LOG_TRIVIAL(warning) << "[ensure_bridge_native_windows_plugins] failed to write marker file: " << e.what();
+        }
+    }
 }
 #endif // _WIN32
 
