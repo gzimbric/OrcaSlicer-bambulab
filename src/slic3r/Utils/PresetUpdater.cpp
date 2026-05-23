@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <boost/filesystem/operations.hpp>
+#include <boost/nowide/convert.hpp>
 #include <boost/nowide/fstream.hpp>
+#include <nlohmann/json.hpp>
 #include <functional>
 #include <thread>
 #include <unordered_map>
@@ -74,6 +76,169 @@ void copy_file_fix(const fs::path &source, const fs::path &target)
 	static constexpr const auto perms = fs::owner_read | fs::owner_write | fs::group_read | fs::others_read;
 	fs::permissions(target, perms);
 }
+
+#if defined(_MSC_VER) || defined(_WIN32)
+// PJarczak bridge support: ensure the native Windows BambuSource.dll and
+// bambu_networking.dll are present in the plugins folder, downloading from
+// Bambu's CDN if missing. With source_module_is_network_module() returning
+// false (camera path uses the native Windows BambuSource.dll directly),
+// these DLLs are required for camera streaming to work. Previously they had
+// to be copied manually from an installed BambuStudio.
+//
+// This piggybacks on Bambu's existing plugin distribution endpoint - the
+// same one used by Bambu Studio's first-launch "Network Plug-in Required"
+// dialog. We do NOT redistribute Bambu's binaries; we just ask their CDN
+// for the Windows flavor of the plugin package, which the bridge's own
+// sync flow skips because it forces X-BBL-OS-Type=linux.
+//
+// Called from PresetUpdater::priv::sync_plugins after the existing
+// bridge-mode (linux) plugin sync. Safe no-op if DLLs already present.
+static void ensure_bridge_native_windows_plugins(bool &cancel,
+                                                 const std::string &http_url,
+                                                 const std::string &plugin_version)
+{
+    if (cancel)
+        return;
+    if (!Slic3r::PJarczakLinuxBridge::enabled())
+        return;
+    if (!Slic3r::PJarczakLinuxBridge::use_bridge_network_module())
+        return;
+
+    fs::path plugin_folder = fs::path(data_dir()) / "plugins";
+    if (fs::exists(plugin_folder / "BambuSource.dll") &&
+        fs::exists(plugin_folder / "bambu_networking.dll")) {
+        BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] DLLs already present, skip";
+        return;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] BambuSource.dll/bambu_networking.dll missing; fetching from Bambu CDN";
+
+    if (!fs::exists(plugin_folder)) {
+        try { fs::create_directories(plugin_folder); }
+        catch (const std::exception &e) {
+            BOOST_LOG_TRIVIAL(error) << "[ensure_bridge_native_windows_plugins] failed to create plugins dir: " << e.what();
+            return;
+        }
+    }
+
+    std::string using_version = plugin_version;
+    if (using_version.size() >= 9)
+        using_version = using_version.substr(0, 9) + "00";
+    std::string meta_url = http_url + "?slicer/plugins/cloud=" + using_version;
+
+    // Save the bridge-overridden headers so we can swap to the default
+    // Windows OS-Type for the duration of this call, then restore.
+    std::map<std::string, std::string> saved_headers = Slic3r::Http::get_extra_headers();
+    std::map<std::string, std::string> windows_headers = saved_headers;
+    windows_headers.erase("X-BBL-OS-Type");
+    windows_headers["X-BBL-Client-Name"] = "BambuStudio";
+    windows_headers["X-BBL-Client-Version"] = Slic3r::PJarczakLinuxBridge::forced_client_version();
+    Slic3r::Http::set_extra_headers(windows_headers);
+
+    std::string download_url;
+    Slic3r::Http http_meta = Slic3r::Http::get(meta_url);
+    http_meta.timeout_connect(15)
+        .timeout_max(60)
+        .on_complete([&download_url](std::string body, unsigned) {
+            try {
+                nlohmann::json j = nlohmann::json::parse(body);
+                if (j.value("message", std::string()) != "success")
+                    return;
+                if (!j.contains("resources") || !j["resources"].is_array() || j["resources"].empty())
+                    return;
+                const auto &entry = j["resources"][0];
+                if (entry.contains("url") && entry["url"].is_string())
+                    download_url = entry["url"].get<std::string>();
+            } catch (const std::exception &e) {
+                BOOST_LOG_TRIVIAL(error) << "[ensure_bridge_native_windows_plugins] meta parse failed: " << e.what();
+            }
+        })
+        .on_error([](std::string body, std::string error, unsigned status) {
+            BOOST_LOG_TRIVIAL(error) << "[ensure_bridge_native_windows_plugins] meta request failed status=" << status << " err=" << error;
+        })
+        .perform_sync();
+
+    Slic3r::Http::set_extra_headers(saved_headers);
+
+    if (cancel)
+        return;
+
+    if (download_url.empty()) {
+        BOOST_LOG_TRIVIAL(warning) << "[ensure_bridge_native_windows_plugins] Bambu CDN returned no Windows plugin URL; camera streaming will require BambuStudio to be installed for the plugin DLLs";
+        return;
+    }
+
+    BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] downloading " << download_url;
+
+    std::string tmp_zip_path = (fs::temp_directory_path() /
+                                fs::unique_path("bambu_windows_plugin_%%%%%%%%.zip")).string();
+    bool dl_ok = false;
+    Slic3r::Http http_dl = Slic3r::Http::get(download_url);
+    http_dl.timeout_connect(15)
+        .timeout_max(240)
+        .on_complete([&tmp_zip_path, &dl_ok](std::string body, unsigned) {
+            try {
+                boost::nowide::ofstream ofs(tmp_zip_path, std::ios::binary | std::ios::trunc);
+                ofs.write(body.data(), static_cast<std::streamsize>(body.size()));
+                ofs.close();
+                dl_ok = fs::exists(tmp_zip_path) && fs::file_size(tmp_zip_path) > 0;
+            } catch (const std::exception &e) {
+                BOOST_LOG_TRIVIAL(error) << "[ensure_bridge_native_windows_plugins] write zip failed: " << e.what();
+            }
+        })
+        .on_error([](std::string body, std::string error, unsigned status) {
+            BOOST_LOG_TRIVIAL(error) << "[ensure_bridge_native_windows_plugins] download failed status=" << status << " err=" << error;
+        })
+        .perform_sync();
+
+    if (cancel || !dl_ok) {
+        try { if (fs::exists(tmp_zip_path)) fs::remove(tmp_zip_path); } catch (...) {}
+        return;
+    }
+
+    mz_zip_archive archive;
+    mz_zip_zero_struct(&archive);
+    if (!open_zip_reader(&archive, tmp_zip_path)) {
+        BOOST_LOG_TRIVIAL(error) << "[ensure_bridge_native_windows_plugins] failed to open downloaded zip";
+        try { fs::remove(tmp_zip_path); } catch (...) {}
+        return;
+    }
+
+    int extracted = 0;
+    mz_uint num_entries = mz_zip_reader_get_num_files(&archive);
+    for (mz_uint i = 0; i < num_entries; ++i) {
+        if (cancel) break;
+        mz_zip_archive_file_stat stat;
+        if (!mz_zip_reader_file_stat(&archive, i, &stat)) continue;
+        if (stat.m_uncomp_size == 0) continue;
+        std::string entry_name = stat.m_filename;
+        // Flatten any directory structure - we only care about the basename.
+        fs::path basename = fs::path(entry_name).filename();
+        std::string bn = basename.string();
+        // Only extract Windows binaries from this zip. The same plugin
+        // package may also include Linux/macOS variants we don't want here.
+        if (!boost::algorithm::iends_with(bn, ".dll"))
+            continue;
+        fs::path dest_path = plugin_folder / bn;
+        try { if (fs::exists(dest_path)) fs::remove(dest_path); }
+        catch (const std::exception &e) {
+            BOOST_LOG_TRIVIAL(warning) << "[ensure_bridge_native_windows_plugins] could not remove existing " << bn << ": " << e.what();
+            continue;
+        }
+        std::wstring wdest = boost::nowide::widen(dest_path.string());
+        if (mz_zip_reader_extract_to_file_w(&archive, stat.m_file_index, wdest.c_str(), 0)) {
+            BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] installed " << bn;
+            ++extracted;
+        } else {
+            BOOST_LOG_TRIVIAL(error) << "[ensure_bridge_native_windows_plugins] failed to extract " << bn;
+        }
+    }
+    close_zip_reader(&archive);
+    try { fs::remove(tmp_zip_path); } catch (...) {}
+
+    BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] " << extracted << " DLL(s) installed";
+}
+#endif // _WIN32
 
 struct Update
 {
@@ -992,6 +1157,14 @@ void PresetUpdater::priv::sync_plugins(std::string http_url, std::string plugin_
         Slic3r::Http::set_extra_headers(previous_headers);
         BOOST_LOG_TRIVIAL(info) << "restored plugin sync headers";
     }
+#endif
+
+#if defined(_MSC_VER) || defined(_WIN32)
+    // After the bridge's own (Linux-flavored) plugin sync, also make sure the
+    // native Windows DLLs are present so the camera path's call to native
+    // BambuSource.dll resolves without requiring BambuStudio to be installed
+    // separately. This piggybacks on Bambu's own CDN endpoint.
+    ensure_bridge_native_windows_plugins(cancel, http_url, using_version);
 #endif
 
     bool result = get_cached_plugins_version(cached_version, force_upgrade);
