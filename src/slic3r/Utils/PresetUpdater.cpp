@@ -174,12 +174,15 @@ static void ensure_bridge_native_windows_plugins(bool &cancel,
         return;
     }
 
-    // Step 2: Fall back to Bambu's CDN. This usually works for the cloud-
-    // auth / MQTT paths but the camera-stream protocol gate may reject the
-    // newer DLL versions Bambu serves today; if that happens the user will
-    // see camera failures and need to install BambuStudio to get a
-    // known-good snapshot.
-    const std::string current_query_version = "02.06.00.00";
+    // Step 2: Fall back to Bambu's CDN. Verified via hash comparison: the
+    // v02.05.03.63 plugin package (returned for any query >= 02.05.03.00)
+    // contains the same BambuSource.dll that BambuStudio's Apr 17 install
+    // shipped (sha256 1fee544f...). That's the version that successfully
+    // handles cloud-mediated TUTK camera streaming on current firmware.
+    // Newer plugin packages on the CDN (02.05.02.58, 02.06.00.50,
+    // 02.07.00.50) have a different BambuSource.dll that the printer
+    // rejects after TLS handshake.
+    const std::string current_query_version = "02.05.03.00";
     BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] no BambuStudio install found; falling back to Bambu CDN (line " << current_query_version << ")";
 
     if (!fs::exists(plugin_folder)) {
