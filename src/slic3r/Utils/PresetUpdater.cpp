@@ -106,17 +106,11 @@ static void ensure_bridge_native_windows_plugins(bool &cancel,
 
     fs::path plugin_folder = fs::path(data_dir()) / "plugins";
 
-    // Force the query to the v02.06.x plugin line rather than reusing the
-    // bridge's forced_client_version (currently "02.05.02.51"). The
-    // v02.05.02.x line predates current camera-streaming protocol support;
-    // the v02.06.00.x DLLs that BambuStudio's April 2026 release installs
-    // are verified-working for the camera path against current firmware.
-    const std::string current_query_version = "02.06.00.00";
-
-    // Use a small marker file to record which query line we last installed.
-    // If existing DLLs were installed for a different (older) line, force a
-    // re-fetch instead of skipping. Without this marker users who downloaded
-    // an earlier helper's v02.05.02.x DLLs would never auto-upgrade.
+    // Marker file records HOW the current DLLs were sourced. Possible values:
+    //   "bs-install"       - copied from an existing BambuStudio install
+    //   "<version>"        - downloaded from Bambu CDN (e.g. "02.06.00.00")
+    // Once any marker is present we leave the DLLs alone. Users with a
+    // working setup can manually delete the marker file to force a refresh.
     fs::path marker_path = plugin_folder / "bambu_plugins_query_version.txt";
     bool dlls_present = fs::exists(plugin_folder / "BambuSource.dll") &&
                         fs::exists(plugin_folder / "bambu_networking.dll");
@@ -128,18 +122,65 @@ static void ensure_bridge_native_windows_plugins(bool &cancel,
             boost::algorithm::trim(marker_value);
         } catch (...) {}
     }
-    if (dlls_present && marker_value == current_query_version) {
-        BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] DLLs present and marker matches "
-                                << current_query_version << ", skip";
+    if (dlls_present && !marker_value.empty()) {
+        BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] DLLs present and marker '"
+                                << marker_value << "' set, skip";
         return;
     }
-    if (dlls_present) {
-        BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] DLLs present but marker ('"
-                                << marker_value << "') does not match expected line "
-                                << current_query_version << ", re-fetching";
-    } else {
-        BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] BambuSource.dll/bambu_networking.dll missing; fetching from Bambu CDN";
+
+    // Step 1: Prefer DLLs from a local BambuStudio installation. Bambu
+    // distributes plugins via CDN but actively pushes newer versions that
+    // appear to be deliberately incompatible with non-BS clients. Whatever
+    // BambuStudio installed locally (which Bambu hasn't been able to silently
+    // update) is a verified-working snapshot for the user's firmware.
+    auto try_copy_from_bs_install = [&plugin_folder]() -> int {
+        // Resolve %APPDATA%/BambuStudio/plugins/
+        const wchar_t *appdata_w = _wgetenv(L"APPDATA");
+        if (!appdata_w) return 0;
+        fs::path bs_plugins = fs::path(boost::nowide::narrow(appdata_w)) / "BambuStudio" / "plugins";
+        if (!fs::exists(bs_plugins / "BambuSource.dll"))
+            return 0;
+        BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] found BambuStudio install at " << bs_plugins.string() << ", copying DLLs";
+        int copied = 0;
+        for (fs::directory_iterator it(bs_plugins); it != fs::directory_iterator(); ++it) {
+            if (!fs::is_regular_file(it->status())) continue;
+            const auto src = it->path();
+            const std::string ext = boost::algorithm::to_lower_copy(src.extension().string());
+            if (ext != ".dll") continue;
+            const auto dst = plugin_folder / src.filename();
+            try {
+                if (fs::exists(dst)) fs::remove(dst);
+                fs::copy_file(src, dst);
+                BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] copied " << src.filename().string();
+                ++copied;
+            } catch (const std::exception &e) {
+                BOOST_LOG_TRIVIAL(warning) << "[ensure_bridge_native_windows_plugins] copy failed for " << src.filename().string() << ": " << e.what();
+            }
+        }
+        return copied;
+    };
+
+    int copied_from_bs = try_copy_from_bs_install();
+    if (copied_from_bs > 0 &&
+        fs::exists(plugin_folder / "BambuSource.dll") &&
+        fs::exists(plugin_folder / "bambu_networking.dll")) {
+        BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] " << copied_from_bs << " DLL(s) copied from BambuStudio install";
+        try {
+            boost::nowide::ofstream ofs(marker_path.string(), std::ios::trunc);
+            ofs << "bs-install\n";
+        } catch (const std::exception &e) {
+            BOOST_LOG_TRIVIAL(warning) << "[ensure_bridge_native_windows_plugins] failed to write marker: " << e.what();
+        }
+        return;
     }
+
+    // Step 2: Fall back to Bambu's CDN. This usually works for the cloud-
+    // auth / MQTT paths but the camera-stream protocol gate may reject the
+    // newer DLL versions Bambu serves today; if that happens the user will
+    // see camera failures and need to install BambuStudio to get a
+    // known-good snapshot.
+    const std::string current_query_version = "02.06.00.00";
+    BOOST_LOG_TRIVIAL(info) << "[ensure_bridge_native_windows_plugins] no BambuStudio install found; falling back to Bambu CDN (line " << current_query_version << ")";
 
     if (!fs::exists(plugin_folder)) {
         try { fs::create_directories(plugin_folder); }
