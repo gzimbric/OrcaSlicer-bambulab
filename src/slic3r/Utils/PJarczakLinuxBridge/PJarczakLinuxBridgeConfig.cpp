@@ -408,7 +408,13 @@ bool abi_version_matches_expected(const std::string& actual_version, std::string
         set_reason(reason, "ok");
         return true;
     }
-    if (expected.size() >= 8 && actual_version.size() >= 8 && actual_version.compare(0, 8, expected, 0, 8) == 0) {
+    // Original FULU check matched the first 8 chars (eg "02.05.02"), which
+    // rejected v02.05.03.x .so when orca was passing v02.05.02.58 as expected.
+    // Loosen to the first 5 chars ("02.05") so any patch within the same
+    // minor-version line is accepted - the network plugin's wire protocol is
+    // major.minor versioned in practice, and Bambu has been pushing newer
+    // patch lines that the FULU bridge silently rejected.
+    if (expected.size() >= 5 && actual_version.size() >= 5 && actual_version.compare(0, 5, expected, 0, 5) == 0) {
         set_reason(reason, "ok");
         return true;
     }
