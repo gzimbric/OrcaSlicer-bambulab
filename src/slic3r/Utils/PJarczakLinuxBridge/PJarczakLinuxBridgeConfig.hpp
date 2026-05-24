@@ -48,4 +48,10 @@ bool validate_linux_payload_set_against_manifest(const boost::filesystem::path& 
 bool abi_version_matches_expected(const std::string& actual_version, std::string* reason = nullptr);
 std::vector<std::string> ota_copy_extensions();
 
+// Base64 helpers used by the host <-> forwarder RPC to pass binary buffers
+// (e.g. H264 SPS/PPS in Bambu_StreamInfo::format_buffer) safely through
+// nlohmann::json which requires UTF-8 in its string values.
+std::string base64_encode(const void* data, std::size_t size);
+std::vector<unsigned char> base64_decode(const std::string& encoded);
+
 }

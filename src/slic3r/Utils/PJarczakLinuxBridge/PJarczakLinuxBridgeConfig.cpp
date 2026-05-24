@@ -513,4 +513,78 @@ std::vector<std::string> ota_copy_extensions()
     return {".so", ".json", ".dll", ".dylib", ".ps1", ".txt", ".sh", ".tar"};
 }
 
+namespace {
+
+constexpr char k_base64_alphabet[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+// inverse lookup table - any byte not in the alphabet maps to 0xFF
+const std::array<unsigned char, 256>& base64_decode_table()
+{
+    static const std::array<unsigned char, 256> table = []() {
+        std::array<unsigned char, 256> t{};
+        t.fill(0xFF);
+        for (unsigned char i = 0; i < 64; ++i)
+            t[static_cast<unsigned char>(k_base64_alphabet[i])] = i;
+        return t;
+    }();
+    return table;
+}
+
+} // namespace
+
+std::string base64_encode(const void* data, std::size_t size)
+{
+    if (!data || size == 0)
+        return std::string();
+    const auto* in = static_cast<const unsigned char*>(data);
+    std::string out;
+    out.reserve(((size + 2) / 3) * 4);
+    std::size_t i = 0;
+    for (; i + 3 <= size; i += 3) {
+        const std::uint32_t triple = (std::uint32_t(in[i]) << 16) |
+                                     (std::uint32_t(in[i + 1]) << 8) |
+                                     std::uint32_t(in[i + 2]);
+        out.push_back(k_base64_alphabet[(triple >> 18) & 0x3F]);
+        out.push_back(k_base64_alphabet[(triple >> 12) & 0x3F]);
+        out.push_back(k_base64_alphabet[(triple >> 6) & 0x3F]);
+        out.push_back(k_base64_alphabet[triple & 0x3F]);
+    }
+    if (i < size) {
+        std::uint32_t triple = std::uint32_t(in[i]) << 16;
+        if (i + 1 < size)
+            triple |= std::uint32_t(in[i + 1]) << 8;
+        out.push_back(k_base64_alphabet[(triple >> 18) & 0x3F]);
+        out.push_back(k_base64_alphabet[(triple >> 12) & 0x3F]);
+        out.push_back(i + 1 < size ? k_base64_alphabet[(triple >> 6) & 0x3F] : '=');
+        out.push_back('=');
+    }
+    return out;
+}
+
+std::vector<unsigned char> base64_decode(const std::string& encoded)
+{
+    std::vector<unsigned char> out;
+    if (encoded.empty())
+        return out;
+    out.reserve((encoded.size() / 4) * 3);
+    const auto& table = base64_decode_table();
+    std::uint32_t buffer = 0;
+    int bits = 0;
+    for (char c : encoded) {
+        if (c == '=' || c == '\n' || c == '\r' || c == ' ' || c == '\t')
+            continue;
+        const auto idx = table[static_cast<unsigned char>(c)];
+        if (idx == 0xFF)
+            return {}; // invalid character — treat as decode failure
+        buffer = (buffer << 6) | idx;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<unsigned char>((buffer >> bits) & 0xFF));
+        }
+    }
+    return out;
+}
+
 }
