@@ -27,19 +27,21 @@
 #include <wx/clipbrd.h>
 #include "wx/evtloop.h"
 
-// When the PJarczak bridge is active, OrcaSlicer is talking to Bambu cloud
-// services and the printer's BRTC server while presenting itself as BambuStudio
-// (User-Agent on outbound HTTP, X-BBL-Client-Name on plugin sync). The camera
-// URL also carries a cli_ver= query parameter that the printer's BRTC server
-// inspects on the local-direct TLS handshake. Sending OrcaSlicer's
-// SLIC3R_VERSION ("01.10.01.50") there is enough for the printer to recognize
-// us as a non-BS client and tear down the BRTC session after the handshake.
-// Match what BambuStudio's URL builder would emit by using the bridge's
-// forced client version when the bridge is in play.
+// The camera URL's cli_ver= query parameter is read by the printer's TUTK /
+// BRTC entrypoint. Empirically the printer ACCEPTS OrcaSlicer's actual
+// SLIC3R_VERSION ("01.10.01.50") and REJECTS a forged BambuStudio version
+// ("02.05.02.51") with [2:-2] immediately after the URL is handed to
+// BambuSource - even though the rest of the request is happily framed as
+// BambuStudio. Likely the printer cross-checks cli_ver against its own
+// dev_ver firmware-line (also "01.X.X.X" on current P2S firmware).
+//
+// Earlier we attempted to mimic Bambu Studio here on the assumption that
+// matching client identity end-to-end would pass more gates; the data shows
+// it does the opposite. Keep the User-Agent + X-BBL-Client-* injection in
+// Http.cpp (which Bambu's cloud API does check) but leave the camera URL's
+// cli_ver as OrcaSlicer's own version.
 static std::string media_cli_ver_str()
 {
-    if (Slic3r::PJarczakLinuxBridge::enabled())
-        return Slic3r::PJarczakLinuxBridge::forced_client_version();
     return std::string(SLIC3R_VERSION);
 }
 
