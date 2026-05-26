@@ -125,7 +125,8 @@ bool read_request_frame(const RawRpcFrame& raw, RpcFrame& frame, std::string& er
 
     frame.id = raw.id;
     frame.method = payload.value("method", std::string());
-    frame.payload = payload.contains("payload") ? payload["payload"] : nlohmann::json::object();
+    const auto& p = payload["payload"];
+    frame.payload = (payload.contains("payload") && p.is_object()) ? p : nlohmann::json::object();
     return true;
 }
 

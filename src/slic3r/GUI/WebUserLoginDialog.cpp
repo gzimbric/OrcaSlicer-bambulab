@@ -68,6 +68,14 @@ std::string pjarczak_browser_login_url(const std::string& host_value, const std:
         host.pop_back();
     if (host.rfind("http://", 0) != 0 && host.rfind("https://", 0) != 0)
         host = "https://bambulab.com";
+    // Sign-in page is on the website (bambulab.com), not the REST API server
+    // (api.bambulab.com). Strip the "api." subdomain if present.
+    for (const std::string prefix : {"https://api.", "http://api."}) {
+        if (host.rfind(prefix, 0) == 0) {
+            host = host.substr(0, prefix.size() - 4) + host.substr(prefix.size());
+            break;
+        }
+    }
     std::string lang = locale.empty() ? "en" : locale;
     std::string callback = host + "/sign-in/callback?source=portal&locale=" + Http::url_encode(lang) +
                            "&redirect_url=" + Http::url_encode(localhost_base) +

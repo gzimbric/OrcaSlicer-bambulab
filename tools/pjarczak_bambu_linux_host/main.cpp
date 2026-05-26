@@ -82,6 +82,8 @@ int main(int argc, char** argv)
             write_json_frame(rpc_out, RpcFrameType::json_response, 0, {{"ok", false}, {"error", err}});
             continue;
         }
+        if (!req.payload.is_object())
+            req.payload = nlohmann::json::object();
 
         std::vector<unsigned char> request_binary;
         if (req.payload.value("__binary_request", false)) {
